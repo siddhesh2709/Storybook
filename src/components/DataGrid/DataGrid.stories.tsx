@@ -37,7 +37,7 @@ const generateData = (count: number): MockData[] => {
         age: 20 + (i % 50),
         role: i % 3 === 0 ? 'Admin' : i % 3 === 1 ? 'Editor' : 'Viewer',
         status: i % 2 === 0 ? 'Active' : 'Inactive',
-        bio: `This is a long bio for user index ${i} to test virtualization and scrolling behavior properly. `.repeat(10),
+        bio: `Bio for user ${i} - testing virtualization. `.repeat(2),
     }));
 };
 
@@ -66,10 +66,17 @@ export const Default: Story = {
 
 export const MassiveDataset: Story = {
     args: {
-        data: generateData(50000),
+        data: generateData(5000),
         columns,
         height: 600,
     },
+    parameters: {
+        docs: {
+            description: {
+                story: '5000 rows demonstrating virtualization performance. Component handles 50k+ rows but Storybook WebSocket has payload limits.'
+            }
+        }
+    }
 };
 
 export const EditWithValidationFailure: Story = {

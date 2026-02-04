@@ -1,0 +1,12 @@
+{
+  "projectId": "PROJECT_ID_PLACEHOLDER",
+  "buildScriptName": "build-storybook",
+  "skip": false,
+  "exitZeroOnChanges": false,
+  "exitOnceUploaded": false,
+  "onlyChanged": false,
+  "externals": [],
+  "diagnosticsFile": false,
+  "fileHashing": true,
+  "debug": false
+}

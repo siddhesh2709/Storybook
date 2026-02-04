@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 
 type UseVirtualizerProps = {
     count: number;
@@ -6,6 +6,7 @@ type UseVirtualizerProps = {
     estimateSize: (index: number) => number;
     overscan?: number;
     horizontal?: boolean;
+    key?: string;
 };
 
 type VirtualItem = {
@@ -21,9 +22,16 @@ export function useVirtualizer({
     estimateSize,
     overscan = 5,
     horizontal = false,
+    key,
 }: UseVirtualizerProps) {
     const [scrollOffset, setScrollOffset] = useState(0);
     const [containerSize, setContainerSize] = useState(0);
+    const estimateSizeRef = useRef(estimateSize);
+    
+    // Update ref when estimateSize changes
+    useEffect(() => {
+        estimateSizeRef.current = estimateSize;
+    }, [estimateSize]);
 
     const handleScroll = useCallback(() => {
         const element = getScrollElement();
@@ -68,57 +76,66 @@ export function useVirtualizer({
     // or build a measurement cache map.
 
     // Simple "measurement" version (supports variable matching logic):
-    const { totalSize, offsets, measurementCache } = useMemo(() => {
+    const measurements = useMemo(() => {
         const offsets = new Array(count);
         const measurementCache = new Array(count);
         let totalSize = 0;
 
         for (let i = 0; i < count; i++) {
             offsets[i] = totalSize;
-            const size = estimateSize(i);
+            const size = estimateSizeRef.current(i);
             measurementCache[i] = size;
             totalSize += size;
         }
 
         return { totalSize, offsets, measurementCache };
-    }, [count, estimateSize]);
+    }, [count, key]);
 
-    const rangeStart = Math.max(0, findNearestBinarySearch(0, count - 1, scrollOffset, offsets));
-    /* 
-       findNearestBinarySearch finding the index where offset <= scrollOffset 
-    */
+    const virtualItems = useMemo(() => {
+        const { offsets, measurementCache } = measurements;
+        if (count === 0 || !offsets || !measurementCache) return [];
 
-    let scanIndex = rangeStart;
-    let accumulatedSize = 0;
-    while (scanIndex < count && accumulatedSize < containerSize) {
-        accumulatedSize += measurementCache[scanIndex];
-        scanIndex++;
-    }
+        const rangeStart = Math.max(0, findNearestBinarySearch(0, count - 1, scrollOffset, offsets));
+        /* 
+           findNearestBinarySearch finding the index where offset <= scrollOffset 
+        */
 
-    const rangeEnd = Math.min(count - 1, scanIndex + overscan);
-    const startIndex = Math.max(0, rangeStart - overscan);
+        let scanIndex = rangeStart;
+        let accumulatedSize = 0;
+        while (scanIndex < count && accumulatedSize < containerSize) {
+            accumulatedSize += measurementCache[scanIndex] ?? 0;
+            scanIndex++;
+        }
 
-    const virtualItems: VirtualItem[] = [];
-    for (let i = startIndex; i <= rangeEnd; i++) {
-        virtualItems.push({
-            index: i,
-            start: offsets[i],
-            size: measurementCache[i],
-            end: offsets[i] + measurementCache[i],
-        });
-    }
+        const rangeEnd = Math.min(count - 1, scanIndex + overscan);
+        const startIndex = Math.max(0, rangeStart - overscan);
+
+        const items: VirtualItem[] = [];
+        for (let i = startIndex; i <= rangeEnd && i < count; i++) {
+            items.push({
+                index: i,
+                start: offsets[i] ?? 0,
+                size: measurementCache[i] ?? 0,
+                end: (offsets[i] ?? 0) + (measurementCache[i] ?? 0),
+            });
+        }
+
+        return items;
+    }, [count, scrollOffset, containerSize, measurements, overscan]);
+
+    const scrollToIndex = useCallback((index: number) => {
+        const element = getScrollElement();
+        if (element && measurements.offsets) {
+            const offset = measurements.offsets[Math.max(0, Math.min(index, count - 1))] ?? 0;
+            if (horizontal) element.scrollLeft = offset;
+            else element.scrollTop = offset;
+        }
+    }, [getScrollElement, measurements, count, horizontal]);
 
     return {
         virtualItems,
-        totalSize,
-        scrollToIndex: (index: number) => {
-            const element = getScrollElement();
-            if (element) {
-                const offset = offsets[Math.max(0, Math.min(index, count - 1))];
-                if (horizontal) element.scrollLeft = offset;
-                else element.scrollTop = offset;
-            }
-        }
+        totalSize: measurements.totalSize,
+        scrollToIndex,
     };
 }
 

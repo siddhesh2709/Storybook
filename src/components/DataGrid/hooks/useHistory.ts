@@ -1,45 +1,45 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 
 export function useHistory<T>(initialState: T) {
     const [state, setState] = useState<T>(initialState);
-    const [history, setHistory] = useState<T[]>([]);
-    const [pointer, setPointer] = useState(-1);
+    const historyRef = useRef<T[]>([]);
+    const pointerRef = useRef(-1);
+    const [canUndo, setCanUndo] = useState(false);
 
     const set = useCallback((nextState: T | ((prev: T) => T)) => {
         setState((current) => {
             const newState = typeof nextState === 'function' ? (nextState as Function)(current) : nextState;
 
             // Add current to history before updating to newState
-            const newHistory = history.slice(0, pointer + 1);
+            const newHistory = historyRef.current.slice(0, pointerRef.current + 1);
             newHistory.push(current);
 
             // Limit history size to 50
-            if (newHistory.length > 50) newHistory.shift();
-            else setPointer(prev => prev + 1);
+            if (newHistory.length > 50) {
+                newHistory.shift();
+            } else {
+                pointerRef.current += 1;
+            }
 
-            setHistory(newHistory);
+            historyRef.current = newHistory;
+            setCanUndo(true);
             return newState;
         });
-    }, [history, pointer]);
+    }, []);
 
     const undo = useCallback(() => {
-        if (pointer < 0) return;
+        if (pointerRef.current < 0) return;
 
-        const prevState = history[pointer];
+        const prevState = historyRef.current[pointerRef.current];
         if (prevState === undefined) return;
 
-        setHistory(prev => {
-            const next = [...prev];
-            next[pointer] = state; // Optional: swap for redo?
-            return next;
-        });
-
         setState(prevState);
-        setPointer(prev => prev - 1);
-    }, [history, pointer, state]);
+        pointerRef.current -= 1;
+        setCanUndo(pointerRef.current >= 0);
+    }, []);
 
     // Simple Redo can be added similarly by keeping track of redo stack.
     // For this assignment "Undo support" is explicitly mentioned.
 
-    return { state, set, undo, canUndo: pointer >= 0 };
+    return { state, set, undo, canUndo };
 }

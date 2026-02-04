@@ -1,4 +1,4 @@
-import { useRef, useState, useMemo, useCallback, type KeyboardEvent } from 'react';
+import { useRef, useState, useMemo, useCallback, memo, type KeyboardEvent } from 'react';
 import type { DataGridProps, GridColumn, SortConfig } from './DataGrid.types';
 import { useVirtualizer } from './hooks/useVirtualizer';
 import { useHistory } from './hooks/useHistory';
@@ -84,64 +84,74 @@ export function DataGrid<T extends { id: string }>({
         return { leftPinned: left, rightPinned: right, unpinned: middle };
     }, [visibleColumns]);
 
+    // Create a stable key for column widths to trigger virtualizer recalculation
+    const columnWidthKey = useMemo(() => 
+        unpinned.map(c => c.width).join('-'), 
+    [unpinned]);
+
     const estimateColSize = useCallback((index: number) => unpinned[index]?.width ?? 100, [unpinned]);
     const colVirtualizer = useVirtualizer({
         count: unpinned.length,
         getScrollElement,
         estimateSize: estimateColSize,
         overscan: 3,
-        horizontal: true
+        horizontal: true,
+        key: columnWidthKey,
     });
 
-    const handleColumnResize = (columnId: string, newWidth: number) => {
+    const handleColumnResize = useCallback((columnId: string, newWidth: number) => {
         setState(prev => ({
             ...prev,
             columns: prev.columns.map(col =>
                 col.id === columnId ? { ...col, width: Math.max(col.minWidth || 50, newWidth) } : col
             )
         }));
-    };
+    }, [setState]);
 
-    const handleSort = (columnId: string) => {
-        const nextSort = [...sortConfig];
-        const existingIdx = nextSort.findIndex(s => s.columnId === columnId);
+    const handleSort = useCallback((columnId: string) => {
+        setState(prev => {
+            const nextSort = [...prev.sortConfig];
+            const existingIdx = nextSort.findIndex(s => s.columnId === columnId);
 
-        let direction: 'asc' | 'desc' | null = 'asc';
-        if (existingIdx !== -1) {
-            const current = nextSort[existingIdx];
-            if (current?.direction === 'asc') direction = 'desc';
-            else if (current?.direction === 'desc') direction = null;
-            nextSort.splice(existingIdx, 1);
-        }
+            let direction: 'asc' | 'desc' | null = 'asc';
+            if (existingIdx !== -1) {
+                const current = nextSort[existingIdx];
+                if (current?.direction === 'asc') direction = 'desc';
+                else if (current?.direction === 'desc') direction = null;
+                nextSort.splice(existingIdx, 1);
+            }
 
-        if (direction) {
-            nextSort.push({ columnId, direction });
-        }
+            if (direction) {
+                nextSort.push({ columnId, direction });
+            }
 
-        setState(prev => ({ ...prev, sortConfig: nextSort }));
-        onSortChange?.(nextSort);
-    };
+            onSortChange?.(nextSort);
+            return { ...prev, sortConfig: nextSort };
+        });
+    }, [setState, onSortChange]);
 
-    const handleColumnReorder = (sourceId: string, targetId: string) => {
+    const handleColumnReorder = useCallback((sourceId: string, targetId: string) => {
         if (sourceId === targetId) return;
-        const sourceIdx = columns.findIndex(c => c.id === sourceId);
-        const targetIdx = columns.findIndex(c => c.id === targetId);
+        setState(prev => {
+            const sourceIdx = prev.columns.findIndex(c => c.id === sourceId);
+            const targetIdx = prev.columns.findIndex(c => c.id === targetId);
 
-        const newCols = [...columns];
-        const [moved] = newCols.splice(sourceIdx, 1);
-        if (moved) newCols.splice(targetIdx, 0, moved);
+            const newCols = [...prev.columns];
+            const [moved] = newCols.splice(sourceIdx, 1);
+            if (moved) newCols.splice(targetIdx, 0, moved);
 
-        setState(prev => ({ ...prev, columns: newCols }));
-    };
+            return { ...prev, columns: newCols };
+        });
+    }, [setState]);
 
-    const toggleColumnVisibility = (columnId: string) => {
+    const toggleColumnVisibility = useCallback((columnId: string) => {
         setState(prev => ({
             ...prev,
             columns: prev.columns.map(c => c.id === columnId ? { ...c, hidden: !(c as any).hidden } : c)
         }));
-    };
+    }, [setState]);
 
-    const handleEditCommit = async () => {
+    const handleEditCommit = useCallback(async () => {
         if (!editingCell) return;
 
         setEditingCell(prev => prev ? { ...prev, loading: true, error: undefined } : null);
@@ -152,14 +162,16 @@ export function DataGrid<T extends { id: string }>({
                 : true;
 
             if (success) {
-                const column = columns.find(c => c.id === editingCell.columnId);
-                const colField = column?.field as keyof T;
-                setState(prev => ({
-                    ...prev,
-                    data: prev.data.map(r => r.id === editingCell.rowId
-                        ? { ...r, [colField]: editingCell.value }
-                        : r)
-                }));
+                setState(prev => {
+                    const column = prev.columns.find(c => c.id === editingCell.columnId);
+                    const colField = column?.field as keyof T;
+                    return {
+                        ...prev,
+                        data: prev.data.map(r => r.id === editingCell.rowId
+                            ? { ...r, [colField]: editingCell.value }
+                            : r)
+                    };
+                });
                 setEditingCell(null);
             } else {
                 setEditingCell(prev => prev ? { ...prev, loading: false, error: 'Validation failed' } : null);
@@ -167,9 +179,9 @@ export function DataGrid<T extends { id: string }>({
         } catch (err) {
             setEditingCell(prev => prev ? { ...prev, loading: false, error: 'Save failed' } : null);
         }
-    };
+    }, [editingCell, onEdit, setState]);
 
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = useCallback((e: KeyboardEvent) => {
         if (e.ctrlKey && e.key === 'z') {
             e.preventDefault();
             undo();
@@ -203,7 +215,7 @@ export function DataGrid<T extends { id: string }>({
                 setEditingCell({ rowId: row.id, columnId: col.id, value: (row as any)[col.field] });
             }
         }
-    };
+    }, [editingCell, focusedCell, sortedData, visibleColumns, rowVirtualizer, handleEditCommit]);
 
     const leftPinnedWidth = leftPinned.reduce((acc, c) => acc + c.width, 0);
     const rightPinnedWidth = rightPinned.reduce((acc, c) => acc + c.width, 0);
@@ -223,7 +235,7 @@ export function DataGrid<T extends { id: string }>({
                     <button
                         onClick={undo}
                         disabled={!canUndo}
-                        className="px-3 py-1.5 text-xs bg-white border border-gray-300 rounded-md hover:bg-gray-100 disabled:opacity-40 transition-all font-semibold text-gray-700 shadow-sm"
+                        className="px-3 py-1.5 text-xs bg-white border border-gray-300 rounded-md hover:bg-gray-100 disabled:opacity-40 font-semibold text-gray-700 shadow-sm"
                     >
                         Undo (Ctrl+Z)
                     </button>
@@ -290,7 +302,7 @@ export function DataGrid<T extends { id: string }>({
             <div
                 ref={containerRef}
                 className="flex-1 overflow-auto bg-white"
-                style={{ contain: 'strict' }}
+                style={{ contain: 'strict', willChange: 'scroll-position' }}
                 tabIndex={0}
             >
                 <div
@@ -305,74 +317,19 @@ export function DataGrid<T extends { id: string }>({
                         const row = sortedData[vRow.index];
                         if (!row) return null;
                         return (
-                            <div
+                            <VirtualRow
                                 key={row.id}
-                                className={cn(
-                                    "absolute left-0 right-0 flex border-b border-gray-100 transition-colors",
-                                    vRow.index % 2 === 0 ? "bg-white" : "bg-gray-50/30",
-                                    "hover:bg-blue-50/50"
-                                )}
-                                style={{ height: vRow.size, transform: `translateY(${vRow.start}px)` }}
-                                role="row"
-                                aria-rowindex={vRow.index + 2}
-                            >
-                                <div className="flex sticky left-0 z-20 bg-inherit border-r-2 border-gray-200">
-                                    {leftPinned.map((col, cIdx) => (
-                                        <DataCell
-                                            key={col.id}
-                                            row={row}
-                                            column={col}
-                                            isFocused={focusedCell?.r === vRow.index && focusedCell?.c === cIdx}
-                                            isEditing={editingCell?.rowId === row.id && editingCell?.columnId === col.id}
-                                            editingState={editingCell}
-                                            onFocus={() => setFocusedCell({ r: vRow.index, c: cIdx })}
-                                            onEdit={(v: any) => setEditingCell(prev => prev ? { ...prev, value: v } : null)}
-                                            onDoubleClick={() => col.editable && setEditingCell({ rowId: row.id, columnId: col.id, value: (row as any)[col.field] })}
-                                        />
-                                    ))}
-                                </div>
-
-                                <div className="relative flex-1 overflow-hidden">
-                                    {colVirtualizer.virtualItems.map(vCol => {
-                                        const col = unpinned[vCol.index];
-                                        if (!col) return null;
-                                        const logicalColIdx = leftPinned.length + vCol.index;
-                                        return (
-                                            <div key={col.id} style={{ position: 'absolute', left: vCol.start, width: vCol.size, height: '100%' }}>
-                                                <DataCell
-                                                    row={row}
-                                                    column={col}
-                                                    isFocused={focusedCell?.r === vRow.index && focusedCell?.c === logicalColIdx}
-                                                    isEditing={editingCell?.rowId === row.id && editingCell?.columnId === col.id}
-                                                    editingState={editingCell}
-                                                    onFocus={() => setFocusedCell({ r: vRow.index, c: logicalColIdx })}
-                                                    onEdit={(v: any) => setEditingCell(prev => prev ? { ...prev, value: v } : null)}
-                                                    onDoubleClick={() => col.editable && setEditingCell({ rowId: row.id, columnId: col.id, value: (row as any)[col.field] })}
-                                                />
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-
-                                <div className="flex sticky right-0 z-20 bg-inherit border-l-2 border-gray-200">
-                                    {rightPinned.map((col, cIdx) => {
-                                        const logicalColIdx = leftPinned.length + unpinned.length + cIdx;
-                                        return (
-                                            <DataCell
-                                                key={col.id}
-                                                row={row}
-                                                column={col}
-                                                isFocused={focusedCell?.r === vRow.index && focusedCell?.c === logicalColIdx}
-                                                isEditing={editingCell?.rowId === row.id && editingCell?.columnId === col.id}
-                                                editingState={editingCell}
-                                                onFocus={() => setFocusedCell({ r: vRow.index, c: logicalColIdx })}
-                                                onEdit={(v: any) => setEditingCell(prev => prev ? { ...prev, value: v } : null)}
-                                                onDoubleClick={() => col.editable && setEditingCell({ rowId: row.id, columnId: col.id, value: (row as any)[col.field] })}
-                                            />
-                                        )
-                                    })}
-                                </div>
-                            </div>
+                                vRow={vRow}
+                                row={row}
+                                leftPinned={leftPinned}
+                                unpinned={unpinned}
+                                rightPinned={rightPinned}
+                                colVirtualizer={colVirtualizer}
+                                focusedCell={focusedCell}
+                                editingCell={editingCell}
+                                setFocusedCell={setFocusedCell}
+                                setEditingCell={setEditingCell}
+                            />
                         );
                     })}
                 </div>
@@ -381,14 +338,14 @@ export function DataGrid<T extends { id: string }>({
     );
 }
 
-function HeaderCell({ column, sortConfig, onSort, onResize, onDragStart, onDrop, isDragging }: any) {
+const HeaderCell = memo(function HeaderCell({ column, sortConfig, onSort, onResize, onDragStart, onDrop, isDragging }: any) {
     const sort = sortConfig.find((s: any) => s.columnId === column.id);
     const [isOver, setIsOver] = useState(false);
 
     return (
         <div
             className={cn(
-                "flex items-center px-4 font-bold text-[10px] text-gray-500 select-none border-r border-gray-200 last:border-r-0 hover:bg-gray-200/50 transition-colors relative bg-gray-50 uppercase tracking-widest cursor-move h-full group",
+                "flex items-center px-4 font-bold text-[10px] text-gray-500 select-none border-r border-gray-200 last:border-r-0 hover:bg-gray-200/50 relative bg-gray-50 uppercase tracking-widest cursor-move h-full group",
                 isDragging && "opacity-20",
                 isOver && "bg-blue-50 border-l-2 border-l-blue-400"
             )}
@@ -413,14 +370,14 @@ function HeaderCell({ column, sortConfig, onSort, onResize, onDragStart, onDrop,
             <div className="flex-1 flex items-center justify-between overflow-hidden gap-2 h-full py-2" onClick={() => column.sortable && onSort(column.id)}>
                 <span className="truncate">{column.title}</span>
                 {column.sortable && (
-                    <span className="text-blue-500 w-3 flex-shrink-0 text-[12px] transition-transform duration-200" style={{ transform: sort?.direction === 'desc' ? 'rotate(180deg)' : 'none', opacity: sort ? 1 : 0.2 }}>
+                    <span className="text-blue-500 w-3 flex-shrink-0 text-[12px]" style={{ transform: sort?.direction === 'desc' ? 'rotate(180deg)' : 'none', opacity: sort ? 1 : 0.2 }}>
                         {sort ? '↑' : '↕'}
                     </span>
                 )}
             </div>
             {column.resizable !== false && (
                 <div
-                    className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-blue-400/30 z-50 transition-colors"
+                    className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-blue-400/30 z-50"
                     onMouseDown={(e) => {
                         e.preventDefault();
                         const startX = e.clientX;
@@ -437,9 +394,9 @@ function HeaderCell({ column, sortConfig, onSort, onResize, onDragStart, onDrop,
             )}
         </div>
     );
-}
+});
 
-function DataCell({ row, column, isFocused, isEditing, editingState, onFocus, onEdit, onDoubleClick }: any) {
+const DataCell = memo(function DataCell({ row, column, isFocused, isEditing, editingState, onFocus, onEdit, onDoubleClick }: any) {
     const value = (row as any)[column.field];
 
     return (
@@ -460,11 +417,12 @@ function DataCell({ row, column, isFocused, isEditing, editingState, onFocus, on
                     <input
                         autoFocus
                         className={cn(
-                            "w-full h-full border-2 border-blue-500 rounded px-2 outline-none text-sm transition-all shadow-sm",
+                            "w-full h-full border-2 border-blue-500 rounded px-2 outline-none text-sm shadow-sm",
                             editingState.error && "border-red-500 ring-1 ring-red-100"
                         )}
                         value={editingState.value}
                         onChange={(e) => onEdit(e.target.value)}
+                        onFocus={(e) => e.target.select()}
                         disabled={editingState.loading}
                     />
                     {editingState.error && (
@@ -485,4 +443,105 @@ function DataCell({ row, column, isFocused, isEditing, editingState, onFocus, on
             )}
         </div>
     );
-}
+}, (prevProps, nextProps) => {
+    return (
+        prevProps.row === nextProps.row &&
+        prevProps.column === nextProps.column &&
+        prevProps.isFocused === nextProps.isFocused &&
+        prevProps.isEditing === nextProps.isEditing &&
+        prevProps.editingState === nextProps.editingState
+    );
+});
+
+const VirtualRow = memo(function VirtualRow({
+    vRow,
+    row,
+    leftPinned,
+    unpinned,
+    rightPinned,
+    colVirtualizer,
+    focusedCell,
+    editingCell,
+    setFocusedCell,
+    setEditingCell
+}: any) {
+    return (
+        <div
+            className={cn(
+                "absolute left-0 right-0 flex border-b border-gray-100",
+                vRow.index % 2 === 0 ? "bg-white" : "bg-gray-50/30",
+                "hover:bg-blue-50/50"
+            )}
+            style={{ height: vRow.size, transform: `translateY(${vRow.start}px)`, willChange: 'transform' }}
+            role="row"
+            aria-rowindex={vRow.index + 2}
+        >
+            <div className="flex sticky left-0 z-20 bg-inherit border-r-2 border-gray-200">
+                {leftPinned.map((col: any, cIdx: number) => (
+                    <DataCell
+                        key={col.id}
+                        row={row}
+                        column={col}
+                        isFocused={focusedCell?.r === vRow.index && focusedCell?.c === cIdx}
+                        isEditing={editingCell?.rowId === row.id && editingCell?.columnId === col.id}
+                        editingState={editingCell}
+                        onFocus={() => setFocusedCell({ r: vRow.index, c: cIdx })}
+                        onEdit={(v: any) => setEditingCell((prev: any) => prev ? { ...prev, value: v } : null)}
+                        onDoubleClick={() => col.editable && setEditingCell({ rowId: row.id, columnId: col.id, value: (row as any)[col.field] })}
+                    />
+                ))}
+            </div>
+
+            <div className="relative flex-1 overflow-hidden">
+                {colVirtualizer.virtualItems.map((vCol: any) => {
+                    const col = unpinned[vCol.index];
+                    if (!col) return null;
+                    const logicalColIdx = leftPinned.length + vCol.index;
+                    return (
+                        <div key={col.id} style={{ position: 'absolute', left: vCol.start, width: vCol.size, height: '100%' }}>
+                            <DataCell
+                                row={row}
+                                column={col}
+                                isFocused={focusedCell?.r === vRow.index && focusedCell?.c === logicalColIdx}
+                                isEditing={editingCell?.rowId === row.id && editingCell?.columnId === col.id}
+                                editingState={editingCell}
+                                onFocus={() => setFocusedCell({ r: vRow.index, c: logicalColIdx })}
+                                onEdit={(v: any) => setEditingCell((prev: any) => prev ? { ...prev, value: v } : null)}
+                                onDoubleClick={() => col.editable && setEditingCell({ rowId: row.id, columnId: col.id, value: (row as any)[col.field] })}
+                            />
+                        </div>
+                    );
+                })}
+            </div>
+
+            <div className="flex sticky right-0 z-20 bg-inherit border-l-2 border-gray-200">
+                {rightPinned.map((col: any, cIdx: number) => {
+                    const logicalColIdx = leftPinned.length + unpinned.length + cIdx;
+                    return (
+                        <DataCell
+                            key={col.id}
+                            row={row}
+                            column={col}
+                            isFocused={focusedCell?.r === vRow.index && focusedCell?.c === logicalColIdx}
+                            isEditing={editingCell?.rowId === row.id && editingCell?.columnId === col.id}
+                            editingState={editingCell}
+                            onFocus={() => setFocusedCell({ r: vRow.index, c: logicalColIdx })}
+                            onEdit={(v: any) => setEditingCell((prev: any) => prev ? { ...prev, value: v } : null)}
+                            onDoubleClick={() => col.editable && setEditingCell({ rowId: row.id, columnId: col.id, value: (row as any)[col.field] })}
+                        />
+                    )
+                })}
+            </div>
+        </div>
+    );
+}, (prevProps, nextProps) => {
+    return (
+        prevProps.row === nextProps.row &&
+        prevProps.vRow.index === nextProps.vRow.index &&
+        prevProps.vRow.start === nextProps.vRow.start &&
+        prevProps.focusedCell?.r === nextProps.focusedCell?.r &&
+        prevProps.focusedCell?.c === nextProps.focusedCell?.c &&
+        prevProps.editingCell?.rowId === nextProps.editingCell?.rowId &&
+        prevProps.editingCell?.columnId === nextProps.editingCell?.columnId
+    );
+});
